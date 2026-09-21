@@ -1,11 +1,12 @@
+import json
+import os
+import re
+
+import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-from dotenv import load_dotenv
-import httpx
-import json
-import re
 
 load_dotenv()
 
@@ -112,6 +113,11 @@ Rules:
                 "keywords": input_data.text.split()[:3]
             }
         
+    except HTTPException:
+        # Preserve deliberate status codes (upstream 4xx/5xx, missing config) instead of
+        # collapsing them into a generic 500 via the handler below.
+        raise
+
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
         import traceback
