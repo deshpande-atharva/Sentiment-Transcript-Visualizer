@@ -2997,7 +2997,7 @@ class Boat {
     this.bobPhase += 0.02;
 
     const waveIntensity = Math.abs(sentiment);
-    this.y += p5.sin(this.bobPhase) * 0.5 * (1 + waveIntensity);
+    this.y += p5.sin(this.bobPhase) * 0.2 * (1 + waveIntensity);
   }
 
   draw(p5, sentiment) {
