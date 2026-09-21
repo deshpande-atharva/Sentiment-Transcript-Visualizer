@@ -63,6 +63,13 @@ A real-time audio sentiment visualization application that transforms spoken wor
 - **Deepgram** - Real-time speech-to-text transcription
 - **Anthropic Claude** - Sentiment analysis and keyword extraction
 
+### Tooling
+- **Docker / Docker Compose** - Containerized backend and nginx-served frontend
+- **pytest + respx** - Backend API tests with the Anthropic API mocked
+- **Jest + React Testing Library** - Frontend tests with browser APIs stubbed
+- **ruff / ESLint** - Python and JavaScript linting
+- **GitHub Actions** - Lint, test, build and Docker image validation
+
 ## 📋 Prerequisites
 
 - Node.js (v14 or higher)
@@ -102,7 +109,10 @@ python -m venv venv
 # source venv/bin/activate
 
 # Install dependencies
-pip install fastapi uvicorn python-dotenv httpx
+pip install -r requirements.txt
+
+# ...or include the test/lint tooling
+pip install -r requirements-dev.txt
 ```
 
 Create `backend/.env`:
@@ -125,6 +135,75 @@ cd frontend
 npm start
 ```
 Frontend will open at `http://localhost:3000`
+
+## 🐳 Running with Docker
+
+Both services are containerized. Copy the root env template and fill in your keys:
+
+```bash
+cp .env.example .env
+```
+
+Then build and start the stack:
+
+```bash
+docker compose up --build
+```
+
+The frontend is served by nginx at `http://localhost:3000` and the backend at
+`http://localhost:8000`. Compose waits for the backend's health check to pass
+before starting the frontend.
+
+To stop:
+
+```bash
+docker compose down          # stop and remove containers
+docker compose stop          # stop but keep containers
+```
+
+**Note on the Deepgram key:** Create React App inlines `REACT_APP_*` variables into
+the JavaScript bundle at build time, so `REACT_APP_DEEPGRAM_API_KEY` is passed as a
+Docker build argument and is readable by anyone who loads the page. This is true of
+`npm start` as well — it is a property of the current client-side transcription
+design, not of the container. Use a restricted, rotatable key. The proper fix is to
+have the backend mint short-lived Deepgram tokens.
+
+## 🧪 Testing
+
+Backend (pytest, with the Anthropic API mocked via `respx` — no network calls, no API key required):
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest                    # 21 tests
+ruff check .              # lint
+```
+
+Frontend (Jest + React Testing Library, with `getUserMedia`, `WebSocket`,
+`AudioContext` and `axios` stubbed):
+
+```bash
+cd frontend
+npm run test:ci           # 36 tests, single run
+npm test                  # watch mode
+npm run lint
+```
+
+Tests never contact Deepgram or Anthropic, so they are deterministic and run
+without credentials.
+
+## ⚙️ CI
+
+`.github/workflows/ci.yml` runs on pushes and pull requests targeting `main`:
+
+| Job | What it validates |
+|-----|-------------------|
+| `backend` | `ruff` lint and the pytest suite on Python 3.12 |
+| `frontend` | ESLint, the Jest suite, and a production `npm run build` on Node 20 |
+| `docker` | `docker compose config`, builds both images, then boots each container and asserts the backend health endpoint and the served frontend bundle respond |
+
+The Docker job runs only after the lint/test jobs pass. There is no deployment
+step — CI stops at verified image builds.
 
 ## 💻 Usage
 
@@ -152,22 +231,44 @@ sentiment-aura/
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── AuraVisualization.jsx  # Main p5.js visualization
-│   │   │   ├── TranscriptDisplay.jsx  # Live transcript panel
-│   │   │   ├── TranscriptDisplay.css
-│   │   │   ├── KeywordsDisplay.jsx    # Floating keywords
-│   │   │   └── KeywordsDisplay.css
-│   │   ├── App.js                     # Main React component
+│   │   │   ├── AuraVisualization.jsx        # Main p5.js visualization
+│   │   │   ├── TranscriptDisplay.jsx        # Live transcript panel
+│   │   │   ├── TranscriptDisplay.test.js
+│   │   │   ├── KeywordsDisplay.jsx          # Floating keywords
+│   │   │   ├── KeywordsDisplay.test.js
+│   │   │   └── *.css
+│   │   ├── test-utils/
+│   │   │   └── browserMocks.js              # WebSocket / Web Audio / getUserMedia doubles
+│   │   ├── App.js                           # Main React component
+│   │   ├── App.recording.test.js            # Mic, socket, PCM encoding, teardown
+│   │   ├── App.analysis.test.js             # Backend call, sentiment state, errors
 │   │   ├── App.css
 │   │   └── index.js
-│   ├── .env                           # API keys (not committed)
+│   ├── Dockerfile                           # Multi-stage build -> nginx
+│   ├── nginx.conf                           # SPA fallback, caching, /healthz
+│   ├── .dockerignore
+│   ├── .env                                 # API keys (not committed)
 │   └── package.json
 ├── backend/
-│   ├── main.py                        # FastAPI server
-│   ├── .env                           # API keys (not committed)
-│   └── requirements.txt
+│   ├── tests/
+│   │   ├── conftest.py                      # TestClient + Anthropic response fixtures
+│   │   ├── test_health.py
+│   │   ├── test_process_text.py             # Success path, API contract, validation
+│   │   └── test_resilience.py               # Upstream failures, malformed LLM output
+│   ├── main.py                              # FastAPI server
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   ├── pyproject.toml                       # pytest + ruff config
+│   ├── requirements.txt
+│   ├── requirements-dev.txt
+│   └── .env                                 # API keys (not committed)
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── docker-compose.yml
+├── .env.example
 ├── .gitignore
-└── README.md
+└── readme.md
 ```
 
 ## 🎨 Technical Highlights
@@ -214,10 +315,14 @@ Microphone → WebSocket → Deepgram → Transcript
 
 ## 🔐 Security
 
-- API keys stored in environment variables
-- `.env` files excluded from version control
-- CORS properly configured
-- Input validation on backend
+- Secrets are supplied via environment variables; no keys in source or Dockerfiles
+- `.env` files excluded from version control (`.env.example` is the only committed template)
+- CORS restricted to an explicit origin allow-list in `backend/main.py`
+- Request bodies validated by Pydantic before any external call is made
+- Both containers run as non-root users (`appuser` uid 1001, `nginx` uid 101)
+
+**Known limitation:** the Deepgram key is used directly by the browser, so it is
+inlined into the client bundle and is not secret. See the Docker section above.
 
 ## 🐛 Troubleshooting
 
