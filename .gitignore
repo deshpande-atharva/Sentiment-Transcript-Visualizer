@@ -145,9 +145,15 @@ backend/venv/
 backend/__pycache__/
 backend/*.pyc
 
+# Test and lint caches
+.pytest_cache/
+.ruff_cache/
+
 # Frontend specific
 frontend/.env
 frontend/node_modules/
+frontend/build/
+frontend/coverage/
 
 # Deployment
 .vercel
