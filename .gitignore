@@ -103,7 +103,9 @@ dist
 
 # Gatsby
 .cache/
-public
+# Anchored to the repo root: an unanchored `public` also matched frontend/public,
+# which is CRA's source template directory and must stay tracked.
+/public
 
 # vuepress
 .vuepress/dist
